@@ -1,0 +1,1 @@
+/usr/bin/c++ -Wl,--dependency-file=CMakeFiles/engine.dir/link.d CMakeFiles/engine.dir/src/engine.cpp.o -o engine  -Wl,-rpath,/home/nov/vulkansdk/1.4.328.0/x86_64/lib /home/nov/vulkansdk/1.4.328.0/x86_64/lib/libvulkan.so /usr/lib/libglfw.so.3.4
