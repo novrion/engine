@@ -25,11 +25,11 @@ const std::vector<const char*> validation_layers = { "VK_LAYER_KHRONOS_validatio
 
 class App {
 public:
-    void run() {
-        init_window();
-        init_vulkan();
-        main_loop();
-        cleanup();
+    void Run() {
+        InitWindow();
+        InitVulkan();
+        MainLoop();
+        Cleanup();
     }
 
 private:
@@ -42,39 +42,41 @@ private:
     vk::raii::PhysicalDevice physical_device = nullptr;
     vk::raii::Device device = nullptr;
 
-    std::vector<const char*> device_extensions = {
+    vk::raii::Queue graphics_queue = nullptr;
+
+    std::vector<const char*> required_device_extensions = {
         vk::KHRSwapchainExtensionName,
         vk::KHRSpirv14ExtensionName,
         vk::KHRSynchronization2ExtensionName,
         vk::KHRCreateRenderpass2ExtensionName
     };
 
-    void init_window() {
+    void InitWindow() {
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
         window = glfwCreateWindow(WIDTH, HEIGHT, "Engine", nullptr, nullptr);
     }
 
-    void init_vulkan() {
-        create_instance();
-        setup_debug_messenger();
-        pick_physical_device();
-       // create_logical_device();
+    void InitVulkan() {
+        CreateInstance();
+        SetupDebugMessenger();
+        PickPhysicalDevice();
+        CreateLogicalDevice();
     }
 
-    void main_loop() {
+    void MainLoop() {
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
         }
     }
 
-    void cleanup() {
+    void Cleanup() {
         glfwDestroyWindow(window);
         glfwTerminate();
     }
 
-    void create_instance() {
+    void CreateInstance() {
         constexpr vk::ApplicationInfo app_info{
             .applicationVersion = VK_MAKE_VERSION(1, 4, 0),
             .pEngineName = "No Engine",
@@ -100,7 +102,7 @@ private:
         }
 
         // Get required extensions
-        auto required_extensions = get_required_extensions();
+        auto required_extensions = GetRequiredExtensions();
 
         // Check if required extensions are supported by Vulkan implementation
         auto extension_properties = context.enumerateInstanceExtensionProperties();
@@ -124,7 +126,7 @@ private:
         instance = vk::raii::Instance(context, create_info);
     }
 
-    void setup_debug_messenger() {
+    void SetupDebugMessenger() {
         if (!enable_validation_layers) return;
 
         vk::DebugUtilsMessageSeverityFlagsEXT severity_flags(
@@ -139,12 +141,12 @@ private:
         vk::DebugUtilsMessengerCreateInfoEXT debug_utils_messenger_create_info_EXT{};
         debug_utils_messenger_create_info_EXT.messageSeverity = severity_flags;
         debug_utils_messenger_create_info_EXT.messageType = message_type_flags;
-        debug_utils_messenger_create_info_EXT.pfnUserCallback = &debug_callback;
+        debug_utils_messenger_create_info_EXT.pfnUserCallback = &DebugCallback;
 
         debug_messenger = instance.createDebugUtilsMessengerEXT(debug_utils_messenger_create_info_EXT);
     }
 
-    void pick_physical_device() {
+    void PickPhysicalDevice() {
         std::vector<vk::raii::PhysicalDevice> devices = instance.enumeratePhysicalDevices();
         const auto dev_iter = std::ranges::find_if(devices,
         [&](auto const & device) {
@@ -158,7 +160,7 @@ private:
                 is_suitable = is_suitable && ( qfp_iter != queue_families.end() );
                 auto extensions = device.enumerateDeviceExtensionProperties( );
                 bool found = true;
-                for (auto const & extension : device_extensions) {
+                for (auto const & extension : required_device_extensions) {
                     auto extension_iter = std::ranges::find_if(extensions, [extension](auto const & ext) {return strcmp(ext.extensionName, extension) == 0;});
                     found = found &&  extension_iter != extensions.end();
                 }
@@ -173,7 +175,46 @@ private:
         }
     }
 
-    std::vector<const char*> get_required_extensions() {
+    void CreateLogicalDevice() {
+        // find index of first queue family that supports graphics
+        std::vector<vk::QueueFamilyProperties> queue_family_properties = physical_device.getQueueFamilyProperties();
+
+        // get first index into queue_family_properties which supports grahpics
+        auto graphics_queue_family_property = std::ranges::find_if(queue_family_properties, [](auto const & qfp)
+                { return (qfp.queueFlags & vk::QueueFlagBits::eGraphics) != static_cast<vk::QueueFlags>(0); });
+        assert(graphics_queue_family_property != queue_family_properties.end() && "No graphics queue family found!");
+
+        uint32_t graphics_index = static_cast<uint32_t>(std::distance(queue_family_properties.begin(), graphics_queue_family_property));
+
+        // query Vulkan 1.3 features
+        vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> feature_chain = {
+            vk::PhysicalDeviceFeatures2{},
+            vk::PhysicalDeviceVulkan13Features{.dynamicRendering = true},
+            vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT{.extendedDynamicState = true}
+        };
+
+        // create a Device
+        float queue_priority = 0.0f;
+        vk::DeviceQueueCreateInfo device_queue_create_info {
+            .queueFamilyIndex = graphics_index,
+            .queueCount = 1,
+            .pQueuePriorities = &queue_priority
+        };
+        vk::DeviceCreateInfo device_create_info {
+            .pNext = &feature_chain.get<vk::PhysicalDeviceFeatures2>(),
+            .queueCreateInfoCount = 1,
+            .pQueueCreateInfos = &device_queue_create_info,
+            .enabledLayerCount = 0,
+            .ppEnabledLayerNames = nullptr,
+            .enabledExtensionCount = static_cast<uint32_t>(required_device_extensions.size()),
+            .ppEnabledExtensionNames = required_device_extensions.data()
+        };
+
+        device = vk::raii::Device(physical_device, device_create_info);
+        graphics_queue = vk::raii::Queue(device, graphics_index, 0);
+    }
+
+    std::vector<const char*> GetRequiredExtensions() {
         uint32_t glfw_extension_count = 0;
         auto glfw_extensions = glfwGetRequiredInstanceExtensions(&glfw_extension_count);
 
@@ -185,7 +226,7 @@ private:
         return extensions;
     }
 
-    static VKAPI_ATTR vk::Bool32 VKAPI_CALL debug_callback(
+    static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(
             vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
             vk::DebugUtilsMessageTypeFlagsEXT type,
             const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
@@ -203,7 +244,7 @@ int main() {
     App app;
 
     try {
-        app.run();
+        app.Run();
     } catch(const std::exception& e) {
         std::cerr << e.what() << std::endl;
         return EXIT_FAILURE;
