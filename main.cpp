@@ -42,6 +42,10 @@ private:
     vk::raii::Device                 device          = nullptr;
     vk::raii::Queue                  queue           = nullptr;
     vk::raii::SwapchainKHR           swap_chain      = nullptr;
+    std::vector<vk::Image>	     swap_chain_images;
+    vk::SurfaceFormatKHR	     swap_chain_surface_format;
+    vk::Extent2D		     swap_chain_extent;
+    std::vector<vk::raii::ImageView> swap_chain_image_views;
 
     std::vector<const char*> required_device_extensions = {
         vk::KHRSwapchainExtensionName,
@@ -63,6 +67,9 @@ private:
         CreateSurface();
         PickPhysicalDevice();
         CreateLogicalDevice();
+        CreateSwapChain();
+        CreateImageViews();
+        //CreateGraphicsPipeline();
     }
 
     void MainLoop() {
@@ -223,6 +230,74 @@ private:
         queue = vk::raii::Queue(device, queue_index, 0);
     }
 
+    void CreateSwapChain() {
+	    auto surface_capabilities = physical_device.getSurfaceCapabilities(*surface);
+	    swap_chain_extent	      = ChooseSwapExtent(surface_capabilities);
+	    swap_chain_surface_format = ChooseSwapSurfaceFormat(physical_device.getSurfaceFormatsKHR(*surface));
+	    vk::SwapchainCreateInfoKHR swap_chain_create_info { .surface          = *surface,
+		    						.minImageCount    = ChooseSwapMinImageCount(surface_capabilities),
+								.imageFormat      = swap_chain_surface_format.format,
+								.imageColorSpace  = swap_chain_surface_format.colorSpace,
+								.imageExtent      = swap_chain_extent,
+								.imageArrayLayers = 1,
+								.imageUsage       = vk::ImageUsageFlagBits::eColorAttachment,
+								.imageSharingMode = vk::SharingMode::eExclusive,
+								.preTransform     = surface_capabilities.currentTransform,
+								.compositeAlpha   = vk::CompositeAlphaFlagBitsKHR:eOpaque,
+								.presentMode      = ChooseSwapPresentMode(physical_device.getSurfacePresentModesKHR(*surface)),
+								.clipped          = true };
+
+	    swap_chain = vk::raii::SwapchainKHR(device, swap_chain_create_info);
+	    swap_chain_images = swap_chain.getImages();
+    }
+
+    void CreateImageViews() {
+	    assert(swap_chain_image_views.empty());
+
+	    vk::ImageViewCreateInfo image_view_create_info { .viewType = vk::ImageViewType::e2D,
+		    					     .format = swap_chain_surface_format.format,
+							     .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 } };
+	    for (auto image : swap_chain_images) {
+		    image_view_create_info.image = image;
+		    swap_chain_image_views.emplace_back(device, image_view_create_info);
+	    }
+    }
+
+    static uint32_t ChooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const & surface_capabilities) {
+	    auto min_image_count = std::max(3u, surface_capabilities.minImageCount);
+	    if ((0 < surface_capabilities.maxImageCount) && (surface_capabilities.maxImageCount < min_image_count)) {
+		    min_image_count = surface_capabilities.maxImageCount;
+	    }
+	    return min_image_count;
+    }
+
+    static vk::SurfaceFormatKHR ChooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const & available_formats) {
+	    assert(!available_formats.empty());
+	    const auto format_it = std::ranges::find_if(
+                available_formats,
+			    [](const auto & format) { return format.format == vk::Format::eB8G8R8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear; });
+	    return format_it != available_formats.end() ? *format_it : available_formats[0];
+    }
+
+    static vk::PresentModeKHR ChooseSwapPresentMode(const std::vector<vk::PresentModeKHR> & available_present_modes) {
+	    assert(std::ranges::any_of(available_present_modes, [](auto present_mode){ return present_mode == vk::PresentModeKHR::eFifo; }));
+	    return std::ranges::any_of(available_present_modes,
+			    [](const vk::PresentModeKHR value) { return vk::PresentModeKHR::eMailbox == value; } ) ? vk::PresentModeKHR::eMailbox : vk::PresentModeKHR::eFifo;
+    }
+
+    vk::Extent2D ChooseSwapExtent(const vk::SurfaceCapabilitiesKHR& capabilities) {
+	    if (capabilities.currentExtent.width != 0xFFFFFFFF) {
+		    return capabilities.currentExtent;
+	    }
+	    int width, height;
+	    glfwGetFrameBufferSize(window, &width, &height);
+
+	    return {
+		    std::clamp<uint32_t>(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+		    std::clamp<uint32_t>(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)
+	    };
+    }
+
     std::vector<const char*> GetRequiredExtensions() {
         uint32_t glfw_extension_count = 0;
         auto glfw_extensions = glfwGetRequiredInstanceExtensions(&glfw_extension_count);
@@ -250,9 +325,8 @@ private:
 };
 
 int main() {
-    App app;
-
     try {
+        App app;
         app.Run();
     } catch(const std::exception& e) {
         std::cerr << e.what() << std::endl;
