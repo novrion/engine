@@ -69,7 +69,7 @@ private:
         CreateLogicalDevice();
         CreateSwapChain();
         CreateImageViews();
-        //CreateGraphicsPipeline();
+        CreateGraphicsPipeline();
     }
 
     void MainLoop() {
@@ -231,7 +231,7 @@ private:
     }
 
     void CreateSwapChain() {
-	    auto surface_capabilities = physical_device.getSurfaceCapabilities(*surface);
+	    auto surface_capabilities = physical_device.getSurfaceCapabilitiesKHR(*surface);
 	    swap_chain_extent	      = ChooseSwapExtent(surface_capabilities);
 	    swap_chain_surface_format = ChooseSwapSurfaceFormat(physical_device.getSurfaceFormatsKHR(*surface));
 	    vk::SwapchainCreateInfoKHR swap_chain_create_info { .surface          = *surface,
@@ -243,7 +243,7 @@ private:
 								.imageUsage       = vk::ImageUsageFlagBits::eColorAttachment,
 								.imageSharingMode = vk::SharingMode::eExclusive,
 								.preTransform     = surface_capabilities.currentTransform,
-								.compositeAlpha   = vk::CompositeAlphaFlagBitsKHR:eOpaque,
+								.compositeAlpha   = vk::CompositeAlphaFlagBitsKHR::eOpaque,
 								.presentMode      = ChooseSwapPresentMode(physical_device.getSurfacePresentModesKHR(*surface)),
 								.clipped          = true };
 
@@ -290,7 +290,7 @@ private:
 		    return capabilities.currentExtent;
 	    }
 	    int width, height;
-	    glfwGetFrameBufferSize(window, &width, &height);
+	    glfwGetFramebufferSize(window, &width, &height);
 
 	    return {
 		    std::clamp<uint32_t>(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
