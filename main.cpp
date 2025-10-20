@@ -46,7 +46,7 @@ struct Vertex {
 };
 
 const std::vector<Vertex> vertices = {
-    {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{0.0f, -0.5f}, {1.0f, 1.0f, 0.0f}},
     {{0.5f, 0.5f},  {0.0f, 1.0f, 0.0f}},
     {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
 };
@@ -125,7 +125,7 @@ private:
         CreateGraphicsPipeline();
         CreateCommandPool();
         CreateVertexBuffer();
-        CreateCommandBuffer();
+        CreateCommandBuffers();
         CreateSyncObjects();
     }
 
@@ -405,20 +405,41 @@ private:
     }
 
     void CreateVertexBuffer() {
-        vk::BufferCreateInfo buffer_info{ .size = sizeof(vertices[0]) * vertices.size(), .usage = vk::BufferUsageFlagBits::eVertexBuffer, .sharingMode = vk::SharingMode::eExclusive };
+        vk::BufferCreateInfo staging_info{ .size = sizeof(vertices[0]) * vertices.size(), .usage = vk::BufferUsageFlagBits::eTransferSrc, .sharingMode = vk::SharingMode::eExclusive };
+        vk::raii::Buffer staging_buffer(device, staging_info);
+        vk::MemoryRequirements mem_requirements_staging = staging_buffer.getMemoryRequirements();
+        vk::MemoryAllocateInfo memory_allocate_info_staging{.allocationSize = mem_requirements_staging.size,
+                                                    .memoryTypeIndex = FindMemoryType(mem_requirements_staging.memoryTypeBits,
+                                                                                      vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent) };
+        vk::raii::DeviceMemory staging_buffer_memory(device, memory_allocate_info_staging);
+
+        staging_buffer.bindMemory(staging_buffer_memory, 0);
+        void* data_staging = staging_buffer_memory.mapMemory(0, staging_info.size);
+        memcpy(data_staging, vertices.data(), staging_info.size);
+        staging_buffer_memory.unmapMemory();
+        
+        vk::BufferCreateInfo buffer_info{.size = sizeof(vertices[0]) * vertices.size(),
+                                         .usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst, .sharingMode = vk::SharingMode::eExclusive };
         vertex_buffer = vk::raii::Buffer(device, buffer_info);
 
         vk::MemoryRequirements mem_requirements = vertex_buffer.getMemoryRequirements();
         vk::MemoryAllocateInfo memory_allocate_info{.allocationSize = mem_requirements.size,
-                                                    .memoryTypeIndex = FindMemoryType(mem_requirements.memoryTypeBits,
-                                                                                      vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent) };
+                                                    .memoryTypeIndex = FindMemoryType(mem_requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal) };
         vertex_buffer_memory = vk::raii::DeviceMemory(device, memory_allocate_info);
 
         vertex_buffer.bindMemory(*vertex_buffer_memory, 0);
 
-        void* data = vertex_buffer_memory.mapMemory(0, buffer_info.size);
-        memcpy(data, vertices.data(), buffer_info.size);
-        vertex_buffer_memory.unmapMemory();
+        CopyBuffer(staging_buffer, vertex_buffer, staging_info.size);
+    }
+
+    void CopyBuffer(vk::raii::Buffer & src_buffer, vk::raii::Buffer & dst_buffer, vk::DeviceSize size) {
+        vk::CommandBufferAllocateInfo alloc_info{ .commandPool = command_pool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount =  1};
+        vk::raii::CommandBuffer command_copy_buffer = std::move(device.allocateCommandBuffers(alloc_info).front());
+        command_copy_buffer.begin(vk::CommandBufferBeginInfo{ .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
+        command_copy_buffer.copyBuffer(*src_buffer, *dst_buffer, vk::BufferCopy(0, 0, size));
+        command_copy_buffer.end();
+        queue.submit(vk::SubmitInfo{ .commandBufferCount = 1, .pCommandBuffers = &*command_copy_buffer }, nullptr);
+        queue.waitIdle();
     }
 
     uint32_t FindMemoryType(uint32_t type_filter, vk::MemoryPropertyFlags properties) {
@@ -433,7 +454,7 @@ private:
         throw std::runtime_error("failed to find suitable memory type!");
     }
 
-    void CreateCommandBuffer() {
+    void CreateCommandBuffers() {
         command_buffers.clear();
         vk::CommandBufferAllocateInfo alloc_info{ .commandPool = command_pool, .level = vk::CommandBufferLevel::ePrimary,
                                                   .commandBufferCount = MAX_FRAMES_IN_FLIGHT };
