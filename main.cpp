@@ -7,6 +7,7 @@
 #include <memory>
 #include <algorithm>
 #include <limits>
+#include <array>
 #include <assert.h>
 
 #include <vulkan/vulkan_raii.hpp>
@@ -36,7 +37,7 @@ struct Vertex {
         return {0, sizeof(Vertex), vk::VertexInputRate::eVertex};
     }
 
-    static std::array<vk::VertexInputAttributeDescription, 2> GetAttributeDescription() {
+    static std::array<vk::VertexInputAttributeDescription, 2> GetAttributeDescriptions() {
         return {
             vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, pos)),
             vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color))
@@ -77,6 +78,9 @@ private:
 
     vk::raii::PipelineLayout pipeline_layout   = nullptr;
     vk::raii::Pipeline       graphics_pipeline = nullptr;
+
+    vk::raii::Buffer vertex_buffer              = nullptr;
+    vk::raii::DeviceMemory vertex_buffer_memory = nullptr;
 
     vk::raii::CommandPool                command_pool = nullptr;
     std::vector<vk::raii::CommandBuffer> command_buffers;
@@ -120,6 +124,7 @@ private:
         CreateImageViews();
         CreateGraphicsPipeline();
         CreateCommandPool();
+        CreateVertexBuffer();
         CreateCommandBuffer();
         CreateSyncObjects();
     }
@@ -350,7 +355,12 @@ private:
         vk::PipelineShaderStageCreateInfo frag_shader_stage_info { .stage = vk::ShaderStageFlagBits::eFragment, .module = frag_shader_module, .pName = "main" };
         vk::PipelineShaderStageCreateInfo shader_stages[] = {vert_shader_stage_info, frag_shader_stage_info};
 
-        vk::PipelineVertexInputStateCreateInfo vertex_input_info;
+        auto binding_description = Vertex::GetBindingDescription();
+        auto attribute_descriptions = Vertex::GetAttributeDescriptions();
+        vk::PipelineVertexInputStateCreateInfo vertex_input_info{ .vertexBindingDescriptionCount = 1,
+                                                                  .pVertexBindingDescriptions = &binding_description,
+                                                                  .vertexAttributeDescriptionCount = static_cast<uint32_t>(attribute_descriptions.size()),
+                                                                  .pVertexAttributeDescriptions = attribute_descriptions.data() };
         vk::PipelineInputAssemblyStateCreateInfo input_assembly{ .topology = vk::PrimitiveTopology::eTriangleList };
         vk::PipelineViewportStateCreateInfo viewport_state{ .viewportCount = 1, .scissorCount = 1 };
 
@@ -394,6 +404,35 @@ private:
         command_pool = vk::raii::CommandPool(device, pool_info);
     }
 
+    void CreateVertexBuffer() {
+        vk::BufferCreateInfo buffer_info{ .size = sizeof(vertices[0]) * vertices.size(), .usage = vk::BufferUsageFlagBits::eVertexBuffer, .sharingMode = vk::SharingMode::eExclusive };
+        vertex_buffer = vk::raii::Buffer(device, buffer_info);
+
+        vk::MemoryRequirements mem_requirements = vertex_buffer.getMemoryRequirements();
+        vk::MemoryAllocateInfo memory_allocate_info{.allocationSize = mem_requirements.size,
+                                                    .memoryTypeIndex = FindMemoryType(mem_requirements.memoryTypeBits,
+                                                                                      vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent) };
+        vertex_buffer_memory = vk::raii::DeviceMemory(device, memory_allocate_info);
+
+        vertex_buffer.bindMemory(*vertex_buffer_memory, 0);
+
+        void* data = vertex_buffer_memory.mapMemory(0, buffer_info.size);
+        memcpy(data, vertices.data(), buffer_info.size);
+        vertex_buffer_memory.unmapMemory();
+    }
+
+    uint32_t FindMemoryType(uint32_t type_filter, vk::MemoryPropertyFlags properties) {
+        vk::PhysicalDeviceMemoryProperties mem_properties = physical_device.getMemoryProperties();
+
+        for (uint32_t i = 0; i < mem_properties.memoryTypeCount; i++) {
+            if ((type_filter & (1 << i)) && (mem_properties.memoryTypes[i].propertyFlags & properties) == properties) {
+                return i;
+            }
+        }
+
+        throw std::runtime_error("failed to find suitable memory type!");
+    }
+
     void CreateCommandBuffer() {
         command_buffers.clear();
         vk::CommandBufferAllocateInfo alloc_info{ .commandPool = command_pool, .level = vk::CommandBufferLevel::ePrimary,
@@ -433,6 +472,7 @@ private:
         command_buffers[current_frame].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphics_pipeline);
         command_buffers[current_frame].setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swap_chain_extent.width), static_cast<float>(swap_chain_extent.height), 0.0f, 1.0f));
         command_buffers[current_frame].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swap_chain_extent));
+        command_buffers[current_frame].bindVertexBuffers(0, *vertex_buffer, {0});
         command_buffers[current_frame].draw(3, 1, 0, 0);
         command_buffers[current_frame].endRendering();
 
