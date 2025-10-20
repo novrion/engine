@@ -17,16 +17,21 @@ TARGET = Engine
 SOURCES = main.cpp
 OBJECTS = $(SOURCES:.cpp=.o)
 
-# Shader compilation
-GLSLANG = glslangValidator
+# Shader configuration
+GLSLC = glslc
 SHADER_DIR = shaders
-SHADERS = $(wildcard $(SHADER_DIR)/*.vert $(SHADER_DIR)/*.frag $(SHADER_DIR)/*.comp)
-SHADER_SPVS = $(SHADERS:.vert=.vert.spv)
-SHADER_SPVS := $(SHADER_SPVS:.frag=.frag.spv)
-SHADER_SPVS := $(SHADER_SPVS:.comp=.comp.spv)
+VERT_SHADERS = $(wildcard $(SHADER_DIR)/*.vert)
+FRAG_SHADERS = $(wildcard $(SHADER_DIR)/*.frag)
+COMP_SHADERS = $(wildcard $(SHADER_DIR)/*.comp)
+SHADER_OUTPUTS = $(VERT_SHADERS:.vert=.vert.spv) $(FRAG_SHADERS:.frag=.frag.spv) $(COMP_SHADERS:.comp=.comp.spv)
+
+
+
+# Phony targets
+.PHONY: all shaders test clean run
 
 # Default target
-all: $(TARGET)
+all: shaders $(TARGET)
 
 # Build executable
 $(TARGET): $(OBJECTS)
@@ -36,29 +41,34 @@ $(TARGET): $(OBJECTS)
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Shader compilation rules
+
+
+# Compile all shaders
+shaders: $(SHADER_OUTPUTS)
+
 $(SHADER_DIR)/%.vert.spv: $(SHADER_DIR)/%.vert
-	$(GLSLANG) --target-env vulkan1.0 -o $@ $
-
+	@mkdir -p $(SHADER_DIR)
+	@echo "compiling vertex shader $<..."
+	$(GLSLC) -o $@ $<
 $(SHADER_DIR)/%.frag.spv: $(SHADER_DIR)/%.frag
-	$(GLSLANG) --target-env vulkan1.0 -o $@ $
-
+	@mkdir -p $(SHADER_DIR)
+	@echo "compiling fragment shader $<..."
+	$(GLSLC) -o $@ $<
 $(SHADER_DIR)/%.comp.spv: $(SHADER_DIR)/%.comp
-	$(GLSLANG) --target-env vulkan1.0 -o $@ $
+	@mkdir -p $(SHADER_DIR)
+	@echo "compiling compute shader $<..."
+	$(GLSLC) -o $@ $<
 
-# Phony targets
-.PHONY: all shaders test clean run
 
-shaders: $(SHADER_SPVS)
-
-test: $(TARGET)
-	./$(TARGET)
 
 run: $(TARGET)
 	./$(TARGET)
 
+test: $(TARGET)
+	./$(TARGET)
+
 clean:
-	rm -f $(TARGET) $(OBJECTS) $(SHADER_SPVS)
+	rm -f $(TARGET) $(OBJECTS) $(SHADER_OUTPUTS)
 
 # Dependency tracking
 -include $(OBJECTS:.o=.d)
