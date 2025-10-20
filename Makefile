@@ -61,7 +61,7 @@ $(SHADER_DIR)/%.comp.spv: $(SHADER_DIR)/%.comp
 
 
 
-run: $(TARGET)
+run: shaders $(TARGET)
 	./$(TARGET)
 
 test: $(TARGET)

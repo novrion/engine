@@ -46,15 +46,19 @@ private:
     uint32_t                         queue_index     = ~0;
     vk::raii::Queue                  queue           = nullptr;
     vk::raii::SwapchainKHR           swap_chain      = nullptr;
-    std::vector<vk::Image>	     swap_chain_images;
-    vk::SurfaceFormatKHR	     swap_chain_surface_format;
-    vk::Extent2D		     swap_chain_extent;
+    std::vector<vk::Image>	         swap_chain_images;
+    vk::SurfaceFormatKHR	         swap_chain_surface_format;
+    vk::Extent2D		             swap_chain_extent;
     std::vector<vk::raii::ImageView> swap_chain_image_views;
 
     vk::raii::PipelineLayout pipeline_layout   = nullptr;
     vk::raii::Pipeline       graphics_pipeline = nullptr;
     vk::raii::CommandPool    command_pool      = nullptr;
-    vk::raii::CommandBuffer command_buffer    = nullptr;
+    vk::raii::CommandBuffer command_buffer     = nullptr;
+
+    vk::raii::Semaphore present_complete_semaphore = nullptr;
+    vk::raii::Semaphore render_finished_semaphore  = nullptr;
+    vk::raii::Fence     draw_fence                 = nullptr;
 
     std::vector<const char*> required_device_extensions = {
         vk::KHRSwapchainExtensionName,
@@ -81,12 +85,16 @@ private:
         CreateGraphicsPipeline();
         CreateCommandPool();
         CreateCommandBuffer();
+        CreateSyncObjects();
     }
 
     void MainLoop() {
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
+            DrawFrame();
         }
+
+        device.waitIdle();
     }
 
     void Cleanup() {
@@ -218,10 +226,15 @@ private:
         }
 
         // query Vulkan 1.3 features
-        vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> feature_chain = {
-            vk::PhysicalDeviceFeatures2{},
-            vk::PhysicalDeviceVulkan13Features{.dynamicRendering = true},
-            vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT{.extendedDynamicState = true}
+        vk::StructureChain<vk::PhysicalDeviceFeatures2,
+                           vk::PhysicalDeviceVulkan11Features,
+                           vk::PhysicalDeviceVulkan13Features,
+                           vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
+            feature_chain = {
+                vk::PhysicalDeviceFeatures2{},
+                vk::PhysicalDeviceVulkan11Features{.shaderDrawParameters = true},
+                vk::PhysicalDeviceVulkan13Features{.synchronization2 = true, .dynamicRendering = true},
+                vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT{.extendedDynamicState = true}
         };
 
         // create a Device
@@ -274,8 +287,8 @@ private:
     }
 
     void CreateGraphicsPipeline() {
-        vk::raii::ShaderModule vert_shader_module = CreateShaderModule(read_file("shaders/shader.frag.spv"));
-        vk::raii::ShaderModule frag_shader_module = CreateShaderModule(read_file("shaders/shader.vert.spv"));
+        vk::raii::ShaderModule vert_shader_module = CreateShaderModule(read_file("shaders/shader.vert.spv"));
+        vk::raii::ShaderModule frag_shader_module = CreateShaderModule(read_file("shaders/shader.frag.spv"));
 
         vk::PipelineShaderStageCreateInfo vert_shader_stage_info { .stage = vk::ShaderStageFlagBits::eVertex, .module = vert_shader_module, .pName = "main" };
         vk::PipelineShaderStageCreateInfo frag_shader_stage_info { .stage = vk::ShaderStageFlagBits::eFragment, .module = frag_shader_module, .pName = "main" };
@@ -411,6 +424,36 @@ private:
             .pImageMemoryBarriers = &barrier
         };
         command_buffer.pipelineBarrier2(dependency_info);
+    }
+
+    void CreateSyncObjects() {
+        present_complete_semaphore = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo());
+        render_finished_semaphore = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo());
+        draw_fence = vk::raii::Fence(device, {.flags = vk::FenceCreateFlagBits::eSignaled});
+    }
+
+    void DrawFrame() {
+        queue.waitIdle();
+
+        auto [result, image_index] = swap_chain.acquireNextImage(UINT64_MAX, *present_complete_semaphore, nullptr);
+        RecordCommandBuffer(image_index);
+
+        device.resetFences(*draw_fence);
+        vk::PipelineStageFlags wait_destination_stage_mask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+        const vk::SubmitInfo submit_info{ .waitSemaphoreCount = 1, .pWaitSemaphores = &*present_complete_semaphore,
+                                          .pWaitDstStageMask = &wait_destination_stage_mask, .commandBufferCount = 1, .pCommandBuffers = &*command_buffer,
+                                          .signalSemaphoreCount = 1, .pSignalSemaphores = &*render_finished_semaphore };
+        queue.submit(submit_info, *draw_fence);
+        while (vk::Result::eTimeout == device.waitForFences(*draw_fence, vk::True, UINT64_MAX));
+
+        const vk::PresentInfoKHR present_info_KHR{ .waitSemaphoreCount = 1, .pWaitSemaphores = &*render_finished_semaphore,
+                                                   .swapchainCount = 1, .pSwapchains = &*swap_chain, .pImageIndices = &image_index };
+        result = queue.presentKHR(present_info_KHR);
+        switch(result) {
+            case vk::Result::eSuccess: break;
+            case vk::Result::eSuboptimalKHR: std::cout << "vk::Queue::presentKHR returned vk::Result::eSuboptimalKHR !\n"; break;
+            default: break; // an unexpected result is  returned!
+        }
     }
 
     [[nodiscard]] vk::raii::ShaderModule CreateShaderModule(const std::vector<char>& code) const {
