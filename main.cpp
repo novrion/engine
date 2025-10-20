@@ -64,6 +64,8 @@ private:
     uint32_t semaphore_index = 0;
     uint32_t current_frame = 0;
 
+    bool frame_buffer_resized = false;
+
     std::vector<const char*> required_device_extensions = {
         vk::KHRSwapchainExtensionName,
         vk::KHRSpirv14ExtensionName,
@@ -76,6 +78,13 @@ private:
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
         window = glfwCreateWindow(WIDTH, HEIGHT, "Engine", nullptr, nullptr);
+        glfwSetWindowUserPointer(window, this);
+        glfwSetFramebufferSizeCallback(window, FrameBufferResizeCallback);
+    }
+
+    static void FrameBufferResizeCallback(GLFWwindow* window, int width, int height) {
+        auto app = reinterpret_cast<App*>(glfwGetWindowUserPointer(window));
+        app->frame_buffer_resized = true;
     }
 
     void InitVulkan() {
@@ -101,9 +110,29 @@ private:
         device.waitIdle();
     }
 
+    void CleanupSwapChain() {
+        swap_chain_image_views.clear();
+        swap_chain = nullptr;
+    }
+
     void Cleanup() {
         glfwDestroyWindow(window);
         glfwTerminate();
+    }
+
+    void RecreateSwapChain() {
+        int width = 0, height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        while (width == 0 || height == 0) {
+            glfwGetFramebufferSize(window, &width, &height);
+            glfwWaitEvents();
+        }
+
+        device.waitIdle();
+
+        CleanupSwapChain();
+        CreateSwapChain();
+        CreateImageViews();
     }
 
     void CreateInstance() {
@@ -343,6 +372,7 @@ private:
     }
 
     void CreateCommandBuffer() {
+        command_buffers.clear();
         vk::CommandBufferAllocateInfo alloc_info{ .commandPool = command_pool, .level = vk::CommandBufferLevel::ePrimary,
                                                   .commandBufferCount = MAX_FRAMES_IN_FLIGHT };
         command_buffers = vk::raii::CommandBuffers(device, alloc_info);
@@ -356,10 +386,10 @@ private:
                 image_index,
                 vk::ImageLayout::eUndefined,
                 vk::ImageLayout::eColorAttachmentOptimal,
-                {},
-                vk::AccessFlagBits2::eColorAttachmentWrite,
-                vk::PipelineStageFlagBits2::eTopOfPipe,
-                vk::PipelineStageFlagBits2::eColorAttachmentOutput
+                {},                                                // srcAccessMask (no need to wait for previous operations)
+                vk::AccessFlagBits2::eColorAttachmentWrite,        // dstAccessMask
+                vk::PipelineStageFlagBits2::eTopOfPipe,            // srcStage
+                vk::PipelineStageFlagBits2::eColorAttachmentOutput // dstStage
         );
         vk::ClearValue clear_color = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
         vk::RenderingAttachmentInfo attachment_info = {
@@ -449,7 +479,31 @@ private:
     void DrawFrame() {
         while (vk::Result::eTimeout == device.waitForFences(*in_flight_fences[current_frame], vk::True, UINT64_MAX))
             ;
-        auto [result, image_index] = swap_chain.acquireNextImage(UINT64_MAX, *present_complete_semaphores[semaphore_index], nullptr);
+
+        // TODO: code duplication of error handling
+        uint32_t image_index;
+        vk::Result result;
+        try {
+            auto [res, idx] = swap_chain.acquireNextImage(UINT64_MAX, *present_complete_semaphores[semaphore_index], nullptr);
+            result = res;
+            image_index = idx;
+        } catch (const vk::SystemError& e) {
+            if (e.code().value() == static_cast<int>(vk::Result::eErrorOutOfDateKHR)) {
+                RecreateSwapChain();
+                return;
+            } else {
+                throw;
+            }
+        }
+
+        if (result == vk::Result::eErrorOutOfDateKHR) {
+            RecreateSwapChain();
+            return;
+        }
+        if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
+            throw std::runtime_error("failed to acquire swap chain image!");
+        }
+        // TODO: END code duplication of error handling
         
         device.resetFences(*in_flight_fences[current_frame]);
         command_buffers[current_frame].reset();
@@ -461,13 +515,24 @@ private:
                                           .signalSemaphoreCount = 1, .pSignalSemaphores = &*render_finished_semaphores[image_index] };
         queue.submit(submit_info, *in_flight_fences[current_frame]);
 
-        const vk::PresentInfoKHR present_info_KHR{ .waitSemaphoreCount = 1, .pWaitSemaphores = &*render_finished_semaphores[image_index],
+        try {
+            const vk::PresentInfoKHR present_info_KHR{ .waitSemaphoreCount = 1, .pWaitSemaphores = &*render_finished_semaphores[image_index],
                                                    .swapchainCount = 1, .pSwapchains = &*swap_chain, .pImageIndices = &image_index };
-        result = queue.presentKHR(present_info_KHR);
-        switch(result) {
-            case vk::Result::eSuccess: break;
-            case vk::Result::eSuboptimalKHR: std::cout << "vk::Queue::presentKHR return vk::Result::eSuboptimalKHR !\n"; break;
-            default: break; // unexpected result!
+            result = queue.presentKHR(present_info_KHR);
+            if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR || frame_buffer_resized) {
+                frame_buffer_resized = false;
+                RecreateSwapChain();
+            } else if (result != vk::Result::eSuccess) {
+                throw std::runtime_error("failed to present swap chain image!");
+            }
+        }
+        catch (const vk::SystemError& e) {
+            if (e.code().value() == static_cast<int>(vk::Result::eErrorOutOfDateKHR)) {
+                RecreateSwapChain();
+                return;
+            } else {
+                throw;
+            }
         }
 
         semaphore_index = (semaphore_index + 1) % present_complete_semaphores.size();
