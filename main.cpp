@@ -15,8 +15,9 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
-const uint32_t WIDTH = 800;
-const uint32_t HEIGHT = 600;
+constexpr uint32_t WIDTH = 800;
+constexpr uint32_t HEIGHT = 600;
+constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 const std::vector<const char*> validation_layers = { "VK_LAYER_KHRONOS_validation" };
 
@@ -53,12 +54,15 @@ private:
 
     vk::raii::PipelineLayout pipeline_layout   = nullptr;
     vk::raii::Pipeline       graphics_pipeline = nullptr;
-    vk::raii::CommandPool    command_pool      = nullptr;
-    vk::raii::CommandBuffer command_buffer     = nullptr;
 
-    vk::raii::Semaphore present_complete_semaphore = nullptr;
-    vk::raii::Semaphore render_finished_semaphore  = nullptr;
-    vk::raii::Fence     draw_fence                 = nullptr;
+    vk::raii::CommandPool                command_pool = nullptr;
+    std::vector<vk::raii::CommandBuffer> command_buffers;
+
+    std::vector<vk::raii::Semaphore> present_complete_semaphores;
+    std::vector<vk::raii::Semaphore> render_finished_semaphores;
+    std::vector<vk::raii::Fence>     in_flight_fences;
+    uint32_t semaphore_index = 0;
+    uint32_t current_frame = 0;
 
     std::vector<const char*> required_device_extensions = {
         vk::KHRSwapchainExtensionName,
@@ -340,12 +344,13 @@ private:
 
     void CreateCommandBuffer() {
         vk::CommandBufferAllocateInfo alloc_info{ .commandPool = command_pool, .level = vk::CommandBufferLevel::ePrimary,
-                                                  .commandBufferCount = 1 };
-        command_buffer = std::move(vk::raii::CommandBuffers(device, alloc_info).front());
+                                                  .commandBufferCount = MAX_FRAMES_IN_FLIGHT };
+        command_buffers = vk::raii::CommandBuffers(device, alloc_info);
     }
 
     void RecordCommandBuffer(uint32_t image_index) {
-        command_buffer.begin( {} );
+        command_buffers[current_frame].begin( {} );
+
         // Before starting rendering, transition swapchain image to COLOR_ATTACHMENT_OPTIMAL
         transition_image_layout(
                 image_index,
@@ -371,12 +376,12 @@ private:
             .pColorAttachments = &attachment_info
         };
 
-        command_buffer.beginRendering(rendering_info);
-        command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphics_pipeline);
-        command_buffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swap_chain_extent.width), static_cast<float>(swap_chain_extent.height), 0.0f, 1.0f));
-        command_buffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swap_chain_extent));
-        command_buffer.draw(3, 1, 0, 0);
-        command_buffer.endRendering();
+        command_buffers[current_frame].beginRendering(rendering_info);
+        command_buffers[current_frame].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphics_pipeline);
+        command_buffers[current_frame].setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swap_chain_extent.width), static_cast<float>(swap_chain_extent.height), 0.0f, 1.0f));
+        command_buffers[current_frame].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swap_chain_extent));
+        command_buffers[current_frame].draw(3, 1, 0, 0);
+        command_buffers[current_frame].endRendering();
 
         // After rendering, transition swapchain image to PRESENT_SRC
         transition_image_layout(
@@ -388,11 +393,11 @@ private:
                 vk::PipelineStageFlagBits2::eColorAttachmentOutput, // srcStage
                 vk::PipelineStageFlagBits2::eBottomOfPipe           // dstStage
         );
-        command_buffer.end();
+        command_buffers[current_frame].end();
     }
 
     void transition_image_layout(
-            uint32_t current_frame,
+            uint32_t image_index,
             vk::ImageLayout old_layout,
             vk::ImageLayout new_layout,
             vk::AccessFlags2 src_access_mask,
@@ -409,7 +414,7 @@ private:
             .newLayout = new_layout,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = swap_chain_images[current_frame],
+            .image = swap_chain_images[image_index],
             .subresourceRange = {
                 .aspectMask = vk::ImageAspectFlagBits::eColor,
                 .baseMipLevel = 0,
@@ -423,37 +428,50 @@ private:
             .imageMemoryBarrierCount = 1,
             .pImageMemoryBarriers = &barrier
         };
-        command_buffer.pipelineBarrier2(dependency_info);
+        command_buffers[current_frame].pipelineBarrier2(dependency_info);
     }
 
     void CreateSyncObjects() {
-        present_complete_semaphore = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo());
-        render_finished_semaphore = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo());
-        draw_fence = vk::raii::Fence(device, {.flags = vk::FenceCreateFlagBits::eSignaled});
+        present_complete_semaphores.clear();
+        render_finished_semaphores.clear();
+        in_flight_fences.clear();
+        
+        for (size_t i = 0; i < swap_chain_images.size(); i++) {
+            present_complete_semaphores.emplace_back(device, vk::SemaphoreCreateInfo());
+            render_finished_semaphores.emplace_back(device, vk::SemaphoreCreateInfo());
+        }
+
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            in_flight_fences.emplace_back(device, vk::FenceCreateInfo{ .flags = vk::FenceCreateFlagBits::eSignaled });
+        }
     }
 
     void DrawFrame() {
-        queue.waitIdle();
-
-        auto [result, image_index] = swap_chain.acquireNextImage(UINT64_MAX, *present_complete_semaphore, nullptr);
+        while (vk::Result::eTimeout == device.waitForFences(*in_flight_fences[current_frame], vk::True, UINT64_MAX))
+            ;
+        auto [result, image_index] = swap_chain.acquireNextImage(UINT64_MAX, *present_complete_semaphores[semaphore_index], nullptr);
+        
+        device.resetFences(*in_flight_fences[current_frame]);
+        command_buffers[current_frame].reset();
         RecordCommandBuffer(image_index);
 
-        device.resetFences(*draw_fence);
         vk::PipelineStageFlags wait_destination_stage_mask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
-        const vk::SubmitInfo submit_info{ .waitSemaphoreCount = 1, .pWaitSemaphores = &*present_complete_semaphore,
-                                          .pWaitDstStageMask = &wait_destination_stage_mask, .commandBufferCount = 1, .pCommandBuffers = &*command_buffer,
-                                          .signalSemaphoreCount = 1, .pSignalSemaphores = &*render_finished_semaphore };
-        queue.submit(submit_info, *draw_fence);
-        while (vk::Result::eTimeout == device.waitForFences(*draw_fence, vk::True, UINT64_MAX));
+        const vk::SubmitInfo submit_info{ .waitSemaphoreCount = 1, .pWaitSemaphores = &*present_complete_semaphores[semaphore_index],
+                                          .pWaitDstStageMask = &wait_destination_stage_mask, .commandBufferCount = 1, .pCommandBuffers = &*command_buffers[current_frame],
+                                          .signalSemaphoreCount = 1, .pSignalSemaphores = &*render_finished_semaphores[image_index] };
+        queue.submit(submit_info, *in_flight_fences[current_frame]);
 
-        const vk::PresentInfoKHR present_info_KHR{ .waitSemaphoreCount = 1, .pWaitSemaphores = &*render_finished_semaphore,
+        const vk::PresentInfoKHR present_info_KHR{ .waitSemaphoreCount = 1, .pWaitSemaphores = &*render_finished_semaphores[image_index],
                                                    .swapchainCount = 1, .pSwapchains = &*swap_chain, .pImageIndices = &image_index };
         result = queue.presentKHR(present_info_KHR);
         switch(result) {
             case vk::Result::eSuccess: break;
-            case vk::Result::eSuboptimalKHR: std::cout << "vk::Queue::presentKHR returned vk::Result::eSuboptimalKHR !\n"; break;
-            default: break; // an unexpected result is  returned!
+            case vk::Result::eSuboptimalKHR: std::cout << "vk::Queue::presentKHR return vk::Result::eSuboptimalKHR !\n"; break;
+            default: break; // unexpected result!
         }
+
+        semaphore_index = (semaphore_index + 1) % present_complete_semaphores.size();
+        current_frame = (current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
     [[nodiscard]] vk::raii::ShaderModule CreateShaderModule(const std::vector<char>& code) const {
