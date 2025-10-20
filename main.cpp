@@ -43,6 +43,7 @@ private:
     vk::raii::SurfaceKHR             surface         = nullptr;
     vk::raii::PhysicalDevice         physical_device = nullptr;
     vk::raii::Device                 device          = nullptr;
+    uint32_t                         queue_index     = ~0;
     vk::raii::Queue                  queue           = nullptr;
     vk::raii::SwapchainKHR           swap_chain      = nullptr;
     std::vector<vk::Image>	     swap_chain_images;
@@ -50,10 +51,10 @@ private:
     vk::Extent2D		     swap_chain_extent;
     std::vector<vk::raii::ImageView> swap_chain_image_views;
 
-    vk::raii::PipelineLayout pipeline_layout = nullptr;
-    vk::raii::Pipeline graphics_pipeline = nullptr;
-
-    //vk::raii::CommandPool command_pool = nullptr;
+    vk::raii::PipelineLayout pipeline_layout   = nullptr;
+    vk::raii::Pipeline       graphics_pipeline = nullptr;
+    vk::raii::CommandPool    command_pool      = nullptr;
+    vk::raii::CommandBuffer command_buffer    = nullptr;
 
     std::vector<const char*> required_device_extensions = {
         vk::KHRSwapchainExtensionName,
@@ -78,6 +79,8 @@ private:
         CreateSwapChain();
         CreateImageViews();
         CreateGraphicsPipeline();
+        CreateCommandPool();
+        CreateCommandBuffer();
     }
 
     void MainLoop() {
@@ -202,7 +205,6 @@ private:
         std::vector<vk::QueueFamilyProperties> queue_family_properties = physical_device.getQueueFamilyProperties();
 
         // get first index into queue_family_properties which supports graphics and present
-        uint32_t queue_index = ~0u;
         for (uint32_t qfp_index = 0; qfp_index < queue_family_properties.size(); qfp_index++) {
             if ((queue_family_properties[qfp_index].queueFlags & vk::QueueFlagBits::eGraphics) &&
                     physical_device.getSurfaceSupportKHR(qfp_index, *surface)) {
@@ -315,6 +317,100 @@ private:
             .pDynamicState = &dynamic_state, .layout = pipeline_layout, .renderPass = nullptr };
 
         graphics_pipeline = vk::raii::Pipeline(device, nullptr, pipeline_info);
+    }
+
+    void CreateCommandPool() {
+        vk::CommandPoolCreateInfo pool_info{ .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+                                             .queueFamilyIndex = queue_index };
+        command_pool = vk::raii::CommandPool(device, pool_info);
+    }
+
+    void CreateCommandBuffer() {
+        vk::CommandBufferAllocateInfo alloc_info{ .commandPool = command_pool, .level = vk::CommandBufferLevel::ePrimary,
+                                                  .commandBufferCount = 1 };
+        command_buffer = std::move(vk::raii::CommandBuffers(device, alloc_info).front());
+    }
+
+    void RecordCommandBuffer(uint32_t image_index) {
+        command_buffer.begin( {} );
+        // Before starting rendering, transition swapchain image to COLOR_ATTACHMENT_OPTIMAL
+        transition_image_layout(
+                image_index,
+                vk::ImageLayout::eUndefined,
+                vk::ImageLayout::eColorAttachmentOptimal,
+                {},
+                vk::AccessFlagBits2::eColorAttachmentWrite,
+                vk::PipelineStageFlagBits2::eTopOfPipe,
+                vk::PipelineStageFlagBits2::eColorAttachmentOutput
+        );
+        vk::ClearValue clear_color = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+        vk::RenderingAttachmentInfo attachment_info = {
+            .imageView = swap_chain_image_views[image_index],
+            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+            .clearValue = clear_color
+        };
+        vk::RenderingInfo rendering_info = {
+            .renderArea = { .offset = { 0, 0 }, .extent = swap_chain_extent },
+            .layerCount = 1,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &attachment_info
+        };
+
+        command_buffer.beginRendering(rendering_info);
+        command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphics_pipeline);
+        command_buffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swap_chain_extent.width), static_cast<float>(swap_chain_extent.height), 0.0f, 1.0f));
+        command_buffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swap_chain_extent));
+        command_buffer.draw(3, 1, 0, 0);
+        command_buffer.endRendering();
+
+        // After rendering, transition swapchain image to PRESENT_SRC
+        transition_image_layout(
+                image_index,
+                vk::ImageLayout::eColorAttachmentOptimal,
+                vk::ImageLayout::ePresentSrcKHR,
+                vk::AccessFlagBits2::eColorAttachmentWrite,         // srcAccessMask
+                {},                                                 // dstAccessMask
+                vk::PipelineStageFlagBits2::eColorAttachmentOutput, // srcStage
+                vk::PipelineStageFlagBits2::eBottomOfPipe           // dstStage
+        );
+        command_buffer.end();
+    }
+
+    void transition_image_layout(
+            uint32_t current_frame,
+            vk::ImageLayout old_layout,
+            vk::ImageLayout new_layout,
+            vk::AccessFlags2 src_access_mask,
+            vk::AccessFlags2 dst_access_mask,
+            vk::PipelineStageFlags2 src_stage_mask,
+            vk::PipelineStageFlags2 dst_stage_mask
+            ) {
+        vk::ImageMemoryBarrier2 barrier = {
+            .srcStageMask = src_stage_mask,
+            .srcAccessMask = src_access_mask,
+            .dstStageMask = dst_stage_mask,
+            .dstAccessMask = dst_access_mask,
+            .oldLayout = old_layout,
+            .newLayout = new_layout,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = swap_chain_images[current_frame],
+            .subresourceRange = {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        vk::DependencyInfo dependency_info = {
+            .dependencyFlags = {},
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &barrier
+        };
+        command_buffer.pipelineBarrier2(dependency_info);
     }
 
     [[nodiscard]] vk::raii::ShaderModule CreateShaderModule(const std::vector<char>& code) const {
