@@ -1,3 +1,6 @@
+// https://docs.vulkan.org/tutorial/latest/04_Vertex_buffers/03_Index_buffer.html
+// https://github.com/KhronosGroup/Vulkan-Tutorial/blob/main/attachments/21_index_buffer.cpp
+
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -46,9 +49,14 @@ struct Vertex {
 };
 
 const std::vector<Vertex> vertices = {
-    {{0.0f, -0.5f}, {1.0f, 1.0f, 0.0f}},
-    {{0.5f, 0.5f},  {0.0f, 1.0f, 0.0f}},
-    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, -0.5f},  {0.0f, 1.0f, 0.0f}},
+    {{0.5f, 0.5f},   {0.0f, 0.0f, 1.0f}},
+    {{-0.5f, 0.5f},  {1.0f, 1.0f, 1.0f}}
+};
+
+const std::vector<uint16_t> indices = {
+    0, 1, 2, 2, 3, 0
 };
 
 class App {
@@ -81,6 +89,8 @@ private:
 
     vk::raii::Buffer vertex_buffer              = nullptr;
     vk::raii::DeviceMemory vertex_buffer_memory = nullptr;
+    vk::raii::Buffer index_buffer               = nullptr;
+    vk::raii::DeviceMemory index_buffer_memory  = nullptr;
 
     vk::raii::CommandPool                command_pool = nullptr;
     std::vector<vk::raii::CommandBuffer> command_buffers;
@@ -125,6 +135,7 @@ private:
         CreateGraphicsPipeline();
         CreateCommandPool();
         CreateVertexBuffer();
+        CreateIndexBuffer();
         CreateCommandBuffers();
         CreateSyncObjects();
     }
@@ -405,31 +416,43 @@ private:
     }
 
     void CreateVertexBuffer() {
-        vk::BufferCreateInfo staging_info{ .size = sizeof(vertices[0]) * vertices.size(), .usage = vk::BufferUsageFlagBits::eTransferSrc, .sharingMode = vk::SharingMode::eExclusive };
-        vk::raii::Buffer staging_buffer(device, staging_info);
-        vk::MemoryRequirements mem_requirements_staging = staging_buffer.getMemoryRequirements();
-        vk::MemoryAllocateInfo memory_allocate_info_staging{.allocationSize = mem_requirements_staging.size,
-                                                    .memoryTypeIndex = FindMemoryType(mem_requirements_staging.memoryTypeBits,
-                                                                                      vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent) };
-        vk::raii::DeviceMemory staging_buffer_memory(device, memory_allocate_info_staging);
+        vk::DeviceSize buffer_size = sizeof(vertices[0]) * vertices.size();
+        vk::raii::Buffer staging_buffer({});
+        vk::raii::DeviceMemory staging_buffer_memory({});
+        CreateBuffer(buffer_size, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, staging_buffer, staging_buffer_memory);
 
-        staging_buffer.bindMemory(staging_buffer_memory, 0);
-        void* data_staging = staging_buffer_memory.mapMemory(0, staging_info.size);
-        memcpy(data_staging, vertices.data(), staging_info.size);
+        void* data_staging = staging_buffer_memory.mapMemory(0, buffer_size);
+        memcpy(data_staging, vertices.data(), buffer_size);
         staging_buffer_memory.unmapMemory();
-        
-        vk::BufferCreateInfo buffer_info{.size = sizeof(vertices[0]) * vertices.size(),
-                                         .usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst, .sharingMode = vk::SharingMode::eExclusive };
-        vertex_buffer = vk::raii::Buffer(device, buffer_info);
 
-        vk::MemoryRequirements mem_requirements = vertex_buffer.getMemoryRequirements();
-        vk::MemoryAllocateInfo memory_allocate_info{.allocationSize = mem_requirements.size,
-                                                    .memoryTypeIndex = FindMemoryType(mem_requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal) };
-        vertex_buffer_memory = vk::raii::DeviceMemory(device, memory_allocate_info);
+        CreateBuffer(buffer_size, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal, vertex_buffer, vertex_buffer_memory);
 
-        vertex_buffer.bindMemory(*vertex_buffer_memory, 0);
+        CopyBuffer(staging_buffer, vertex_buffer, buffer_size);
+    }
 
-        CopyBuffer(staging_buffer, vertex_buffer, staging_info.size);
+    void CreateIndexBuffer() {
+        vk::DeviceSize buffer_size = sizeof(indices[0]) * indices.size();
+
+        vk::raii::Buffer staging_buffer({});
+        vk::raii::DeviceMemory staging_buffer_memory({});
+        CreateBuffer(buffer_size, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, staging_buffer, staging_buffer_memory);
+
+        void* data = staging_buffer_memory.mapMemory(0, buffer_size);
+        memcpy(data, indices.data(), (size_t) buffer_size);
+        staging_buffer_memory.unmapMemory();
+
+        CreateBuffer(buffer_size, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal, index_buffer, index_buffer_memory);
+
+        CopyBuffer(staging_buffer, index_buffer, buffer_size);
+    }
+
+    void CreateBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties, vk::raii::Buffer& buffer, vk::raii::DeviceMemory& buffer_memory) {
+        vk::BufferCreateInfo buffer_info{ .size = size, .usage = usage, .sharingMode = vk::SharingMode::eExclusive };
+        buffer = vk::raii::Buffer(device, buffer_info);
+        vk::MemoryRequirements mem_requirements = buffer.getMemoryRequirements();
+        vk::MemoryAllocateInfo alloc_info{ .allocationSize = mem_requirements.size, .memoryTypeIndex = FindMemoryType(mem_requirements.memoryTypeBits, properties) };
+        buffer_memory = vk::raii::DeviceMemory(device, alloc_info);
+        buffer.bindMemory(buffer_memory, 0);
     }
 
     void CopyBuffer(vk::raii::Buffer & src_buffer, vk::raii::Buffer & dst_buffer, vk::DeviceSize size) {
@@ -494,7 +517,8 @@ private:
         command_buffers[current_frame].setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swap_chain_extent.width), static_cast<float>(swap_chain_extent.height), 0.0f, 1.0f));
         command_buffers[current_frame].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swap_chain_extent));
         command_buffers[current_frame].bindVertexBuffers(0, *vertex_buffer, {0});
-        command_buffers[current_frame].draw(3, 1, 0, 0);
+        command_buffers[current_frame].bindIndexBuffer(*index_buffer, 0, vk::IndexType::eUint16);
+        command_buffers[current_frame].drawIndexed(6, 1, 0, 0, 0);
         command_buffers[current_frame].endRendering();
 
         // After rendering, transition swapchain image to PRESENT_SRC
