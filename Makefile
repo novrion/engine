@@ -13,7 +13,7 @@ LDFLAGS = -lglfw -lvulkan -ldl -lpthread -lX11 -lXxf86vm -lXrandr -lXi
 
 # Project files
 TARGET = Engine
-SOURCES = main.cpp
+SOURCES = src/main.cpp src/core/engine.cpp src/core/window.cpp
 OBJECTS = $(SOURCES:.cpp=.o)
 
 # Shader settings
