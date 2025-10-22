@@ -8,11 +8,16 @@ Engine::Engine(Window& window_ref) {
     this->window->SetFramebufferResizeCallback([this]() { frame_buffer_resized = true; });
 
     CreateInstance();
+    SetupDebugMessenger();
 }
 
 void Engine::Cleanup() {
     //device.waitIdle();
 }
+
+
+
+
 
 void Engine::CreateInstance() {
 
@@ -65,4 +70,47 @@ void Engine::CreateInstance() {
     instance = vk::raii::Instance(context, create_info);
 }
 
-void Engine::Tick() {}
+void Engine::SetupDebugMessenger() {
+    if (!enable_validation_layers) return;
+
+    vk::DebugUtilsMessageSeverityFlagsEXT severity_flags(
+            vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose |
+            vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+            vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
+    vk::DebugUtilsMessageTypeFlagsEXT message_type_flags(
+            vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
+            vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
+            vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation);
+
+    vk::DebugUtilsMessengerCreateInfoEXT debug_utils_messenger_create_info_EXT{
+        .messageSeverity = severity_flags,
+        .messageType = message_type_flags,
+        .pfnUserCallback = &DebugCallback
+    };
+    debug_messenger = instance.createDebugUtilsMessengerEXT(debug_utils_messenger_create_info_EXT);
+}
+
+
+
+
+
+
+//
+// Runtime
+//
+
+VKAPI_ATTR vk::Bool32 VKAPI_CALL Engine::DebugCallback(
+        vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
+        vk::DebugUtilsMessageTypeFlagsEXT type,
+        const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
+        void*) {
+    if (severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eError ||
+        severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning) {
+        std::cerr << "validation layer: type " << to_string(type) << " msg: " << pCallbackData->pMessage << std::endl;
+    }
+
+    return vk::False;
+}
+
+void Engine::Tick() {
+}

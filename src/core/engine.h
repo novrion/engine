@@ -4,6 +4,7 @@
 #include <vector>
 #include <algorithm>
 #include <cstring>
+#include <iostream>
 #include <stdexcept>
 
 class Window;
@@ -22,15 +23,9 @@ private:
     Window* window = nullptr;
     bool frame_buffer_resized = false;
 
-#ifdef NDEBUG
-    static constexpr bool enable_validation_layers = false;
-#else
-    static constexpr bool enable_validation_layers = true;
-#endif
-
     vk::raii::Context        context;
     vk::raii::Instance       instance        = nullptr;
-    vk::raii::SurfaceKHR      surface         = nullptr;
+    vk::raii::SurfaceKHR     surface         = nullptr;
     vk::raii::PhysicalDevice physical_device = nullptr;
     vk::raii::Device         device          = nullptr;
     vk::raii::Queue          queue           = nullptr;
@@ -56,9 +51,23 @@ private:
         vk::KHRCreateRenderpass2ExtensionName
     };
 
+#ifdef NDEBUG
+    static constexpr bool enable_validation_layers = false;
+#else
+    static constexpr bool enable_validation_layers = true;
+#endif
+    vk::raii::DebugUtilsMessengerEXT debug_messenger = nullptr;
 
     // Initialisation
     void CreateInstance();
+    void SetupDebugMessenger();
+
+    // Runtime
+    static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(
+        vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
+        vk::DebugUtilsMessageTypeFlagsEXT type,
+        const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
+        void*);
 
     // helper methods
     std::vector<const char*> GetRequiredExtensions();
