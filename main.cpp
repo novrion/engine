@@ -1,5 +1,5 @@
-// https://docs.vulkan.org/tutorial/latest/09_Generating_Mipmaps.html
-// https://github.com/KhronosGroup/Vulkan-Tutorial/blob/main/attachments/21_index_buffer.cpp
+// https://github.com/KhronosGroup/Vulkan-Tutorial/tree/main/attachments
+// https://docs.vulkan.org/tutorial/latest/10_Multisampling.html
 
 #include <iostream>
 #include <fstream>
@@ -1080,7 +1080,14 @@ private:
 
         UniformBufferObject ubo{};
         ubo.model = rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-        ubo.view = lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+
+        static float camX = 2.0f, camY = 2.0f, camZ = 2.0f;
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camY += 0.01f;
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camY -= 0.01f;
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camX -= 0.01f;
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) camX += 0.01f;
+
+        ubo.view = lookAt(glm::vec3(camX, camY, camZ), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
         ubo.proj = glm::perspective(glm::radians(45.0f), static_cast<float>(swap_chain_extent.width) / static_cast<float>(swap_chain_extent.height), 0.1f, 10.0f);
         ubo.proj[1][1] *= -1;
 
