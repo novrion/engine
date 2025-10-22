@@ -103,6 +103,8 @@ private:
 
     vk::raii::Image texture_image               = nullptr;
     vk::raii::DeviceMemory texture_image_memory = nullptr;
+    vk::raii::ImageView texture_image_view      = nullptr;
+    vk::raii::Sampler texture_sampler           = nullptr;
 
     vk::raii::Buffer vertex_buffer              = nullptr;
     vk::raii::DeviceMemory vertex_buffer_memory = nullptr;
@@ -160,6 +162,8 @@ private:
         CreateGraphicsPipeline();
         CreateCommandPool();
         CreateTextureImage();
+        CreateTextureImageView();
+        CreateTextureSampler();
         CreateVertexBuffer();
         CreateIndexBuffer();
         CreateUniformBuffers();
@@ -284,7 +288,7 @@ private:
     void PickPhysicalDevice() {
         std::vector<vk::raii::PhysicalDevice> devices = instance.enumeratePhysicalDevices();
         const auto dev_iter = std::ranges::find_if(devices,
-        [&](auto const & device) {
+            [&](auto const & device) {
                 auto queue_families = device.getQueueFamilyProperties();
                 bool is_suitable = device.getProperties().apiVersion >= VK_API_VERSION_1_4;
                 const auto qfp_iter = std::ranges::find_if(queue_families,
@@ -297,9 +301,15 @@ private:
                 bool found = true;
                 for (auto const & extension : required_device_extensions) {
                     auto extension_iter = std::ranges::find_if(extensions, [extension](auto const & ext) {return strcmp(ext.extensionName, extension) == 0;});
-                    found = found &&  extension_iter != extensions.end();
+                    found = found && extension_iter != extensions.end();
                 }
-                is_suitable = is_suitable && found;
+
+                auto features = device.template getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+                bool supports_required_features = features.template get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy &&
+                                                  features.template get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters &&
+                                                  features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
+                                                  features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
+                is_suitable = is_suitable && found && supports_required_features;
                 if (is_suitable) {
                     physical_device = device;
                 }
@@ -332,7 +342,7 @@ private:
                            vk::PhysicalDeviceVulkan13Features,
                            vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
             feature_chain = {
-                vk::PhysicalDeviceFeatures2{},
+                vk::PhysicalDeviceFeatures2{.features = {.samplerAnisotropy = true }},
                 vk::PhysicalDeviceVulkan11Features{.shaderDrawParameters = true},
                 vk::PhysicalDeviceVulkan13Features{.synchronization2 = true, .dynamicRendering = true},
                 vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT{.extendedDynamicState = true}
@@ -378,9 +388,10 @@ private:
     void CreateImageViews() {
 	    assert(swap_chain_image_views.empty());
 
-	    vk::ImageViewCreateInfo image_view_create_info { .viewType = vk::ImageViewType::e2D,
-		    					     .format = swap_chain_surface_format.format,
-							     .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 } };
+	    vk::ImageViewCreateInfo image_view_create_info {
+            .viewType = vk::ImageViewType::e2D,
+		    .format = swap_chain_surface_format.format,
+			.subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 } };
 	    for (auto image : swap_chain_images) {
 		    image_view_create_info.image = image;
 		    swap_chain_image_views.emplace_back(device, image_view_create_info);
@@ -485,6 +496,36 @@ private:
         TransitionImageLayout(texture_image, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
         CopyBufferToImage(staging_buffer, texture_image, static_cast<uint32_t>(tex_width), static_cast<uint32_t>(tex_height));
         TransitionImageLayout(texture_image, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+    }
+
+    void CreateTextureImageView() {
+        texture_image_view = CreateImageView(texture_image, vk::Format::eR8G8B8A8Srgb);
+    }
+
+    void CreateTextureSampler() {
+        vk::PhysicalDeviceProperties properties = physical_device.getProperties();
+        vk::SamplerCreateInfo sampler_info{
+            .magFilter = vk::Filter::eLinear,
+            .minFilter = vk::Filter::eLinear,
+            .mipmapMode = vk::SamplerMipmapMode::eLinear,
+            .addressModeU = vk::SamplerAddressMode::eRepeat,
+            .addressModeV = vk::SamplerAddressMode::eRepeat,
+            .addressModeW = vk::SamplerAddressMode::eRepeat,
+            .mipLodBias = 0.0f,
+            .anisotropyEnable = vk::True,
+            .maxAnisotropy = properties.limits.maxSamplerAnisotropy,
+            .compareEnable = vk::False,
+            .compareOp = vk::CompareOp::eAlways };
+        texture_sampler = vk::raii::Sampler(device, sampler_info);
+    }
+
+    vk::raii::ImageView CreateImageView(vk::raii::Image& image, vk::Format format) {
+        vk::ImageViewCreateInfo view_info{
+            .image = image,
+            .viewType = vk::ImageViewType::e2D,
+            .format = format,
+            .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 } };
+        return vk::raii::ImageView(device, view_info);
     }
 
     void CreateImage(uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties, vk::raii::Image& image, vk::raii::DeviceMemory& image_memory) {
