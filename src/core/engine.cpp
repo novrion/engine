@@ -90,6 +90,14 @@ void Engine::SetupDebugMessenger() {
     debug_messenger = instance.createDebugUtilsMessengerEXT(debug_utils_messenger_create_info_EXT);
 }
 
+void Engine::CreateSurface() {
+    VkSurfaceKHR _surface;
+    if (window->CreateVulkanWindowSurface(*instance, nullptr, &_surface) != 0) {
+        throw std::runtime_error("failed to create window surface");
+    }
+    surface = vk::raii::SurfaceKHR(instance, _surface);
+}
+
 
 
 

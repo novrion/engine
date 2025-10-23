@@ -1,11 +1,12 @@
 #pragma once
 
-#include <vulkan/vulkan_raii.hpp>
 #include <vector>
 #include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+
+#include <vulkan/vulkan_raii.hpp>
 
 class Window;
 
@@ -61,6 +62,7 @@ private:
     // Initialisation
     void CreateInstance();
     void SetupDebugMessenger();
+    void CreateSurface();
 
     // Runtime
     static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(

@@ -1,7 +1,5 @@
 #include "window.h"
 
-#include <GLFW/glfw3.h>
-
 //
 // Initialisation
 //
@@ -55,4 +53,8 @@ std::vector<const char*> Window::GetRequiredVulkanExtensions() const {
     const char** glfw_extensions = glfwGetRequiredInstanceExtensions(&glfw_extension_count);
     std::vector<const char*> extensions(glfw_extensions, glfw_extensions + glfw_extension_count);
     return extensions;
+}
+
+VkResult Window::CreateVulkanWindowSurface(VkInstance instance, const VkAllocationCallbacks* allocator, VkSurfaceKHR* surface) const {
+    return glfwCreateWindowSurface(instance, window, allocator, surface);
 }

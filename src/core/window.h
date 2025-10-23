@@ -3,8 +3,8 @@
 #include <functional>
 #include <vector>
 #include <cstdint>
-
-struct GLFWwindow;
+#include <vulkan/vulkan.h>
+#include <GLFW/glfw3.h>
 
 class Window {
 public:
@@ -22,6 +22,7 @@ public:
 
     // Vulkan
     std::vector<const char*> GetRequiredVulkanExtensions() const;
+    VkResult CreateVulkanWindowSurface(VkInstance instance, const VkAllocationCallbacks* allocator, VkSurfaceKHR* surface) const;
 
 private:
     GLFWwindow* window = nullptr;
